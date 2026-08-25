@@ -1,6 +1,7 @@
 package ism
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -233,6 +234,109 @@ func TestMatchAddNewMatches(t *testing.T) {
 	}
 }
 
+func equalAutomata(a, b *Automaton, t *testing.T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	mapping := map[*node]*node{}
+
+	var compare func(*node, *node) bool
+	compare = func(x, y *node) bool {
+		if mapped, ok := mapping[x]; ok {
+			return mapped == y
+		}
+
+		if x == nil || y == nil {
+			return x == y
+		}
+		if x.root != y.root || !slices.Equal(x.data, y.data) {
+			t.Logf("between x=%p y=%p: root=%t,%t equal=%t", x, y, x.root, y.root, slices.Equal(x.data, y.data))
+			return false
+		}
+		if len(x.T) != len(y.T) || len(x.O) != len(y.O) {
+			t.Logf("between x=%p y=%p: len(T)=%d,%d len(O)=%d,%d", x, y, len(x.T), len(y.T), len(x.O), len(y.O))
+			return false
+		}
+
+		mapping[x] = y
+
+		for c, child := range x.T {
+			other, ok := y.T[c]
+			if !ok || !compare(child, other) {
+				return false
+			}
+		}
+
+		if (x.F == nil) != (y.F == nil) {
+			return false
+		}
+		if x.F != nil && !compare(x.F, y.F) {
+			return false
+		}
+
+		return true
+	}
+
+	return compare(a.root, b.root)
+}
+
+// this tests RemoveString
+func TestMatchAddRemoveSame(t *testing.T) {
+	strings := [][]rune{
+		[]rune("apple"),
+		[]rune("banana"),
+		[]rune("carrot"),
+	}
+
+	a, err := InitAutomaton(strings)
+	if err != nil {
+		t.Fatalf("InitAutomaton failed: %v", err)
+	}
+
+	b, err := InitAutomaton(strings)
+	if err != nil {
+		t.Fatalf("InitAutomaton failed: %v", err)
+	}
+
+	haystack := []rune("applebananacarrot")
+	m1, err := a.Match(haystack)
+	if err != nil {
+		t.Fatalf("first Match failed: %v", err)
+	}
+
+	if !equalAutomata(a, b, t) {
+		t.Fatalf("equalAutomata does not work")
+	}
+
+	err = b.AddString([]rune("jelly"))
+	if err != nil {
+		t.Fatalf("AddString failed: %v", err)
+	}
+
+	if equalAutomata(a, b, t) {
+		t.Fatalf("a and b are equal after AddString")
+	}
+
+	err = b.RemoveString([]rune("jelly"))
+	if err != nil {
+		t.Fatalf("RemoveString failed: %v", err)
+	}
+
+	if !equalAutomata(a, b, t) {
+		t.Fatalf("a and b should be equal after RemoveString")
+	}
+
+	m2, err := b.Match(haystack)
+	if err != nil {
+		t.Fatalf("second Match failed: %v", err)
+	}
+
+	if !reflect.DeepEqual(m1, m2) {
+		t.Fatalf("matches are different")
+	}
+}
+
 func BenchmarkInit(b *testing.B) {
 	master := []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzzyxwvutsrqponmlkjihgfedcba9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA")
 	strings := make([][]rune, 0, 10000)
@@ -290,6 +394,53 @@ func BenchmarkMatchBasic(b *testing.B) {
 		_, err := a.Match(k)
 		if err != nil {
 			b.Fatalf("Match failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkRemoveString(b *testing.B) {
+	master := []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzzyxwvutsrqponmlkjihgfedcba9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA")
+	strings := make([][]rune, 0, 10000)
+	for i := range 10000 {
+		strings = append(strings, slices.Clone(master[i%len(master):]))
+	}
+
+	a, err := InitAutomaton(strings)
+	if err != nil {
+		b.Fatalf("InitAutomaton failed: %v", err)
+	}
+
+	for b.Loop() {
+		for _, str := range strings {
+			if err := a.RemoveString(str); err != nil {
+				b.Fatalf("RemoveString failed: %v", err)
+			}
+		}
+	}
+}
+
+func BenchmarkRemoveMatch(b *testing.B) {
+	master := []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzzyxwvutsrqponmlkjihgfedcba9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA")
+	haystack := master[len(master)/2:]
+	strings := make([][]rune, 0, 10000)
+	for i := range 10000 {
+		strings = append(strings, slices.Clone(master[i%len(master):]))
+	}
+
+	a, err := InitAutomaton(strings)
+	if err != nil {
+		b.Fatalf("InitAutomaton failed: %v", err)
+	}
+
+	for b.Loop() {
+		for _, str := range strings {
+			if err := a.RemoveString(str); err != nil {
+				b.Fatalf("RemoveString failed: %v", err)
+			}
+
+			if _, err = a.Match(haystack); err != nil {
+				b.Fatalf("Match failed: %v", err)
+			}
 		}
 	}
 }

@@ -4,6 +4,7 @@ package ism
 
 import (
 	"errors"
+	"slices"
 )
 
 var ErrNullPointer = errors.New("null pointer dereference")
@@ -17,13 +18,15 @@ var ErrEmptyNodeData = errors.New("empty node data")
 type node struct {
 	root bool
 
+	parent *node
+
 	data []rune
 
 	// trie T
 	T map[rune]*node
 
-	// output set
-	O map[*[]rune]struct{}
+	// output set (keys are indices into keywords array)
+	O map[uint64]struct{}
 
 	// failing
 	F  *node
@@ -43,7 +46,7 @@ type Match struct {
 	Word []rune
 }
 
-func (n *node) AddOutput(str *[]rune) error {
+func (n *node) AddOutput(kwIdx uint64) error {
 	if n.O == nil {
 		return ErrOutputDoesNotExist
 	}
@@ -53,11 +56,11 @@ func (n *node) AddOutput(str *[]rune) error {
 	}
 
 	// O[n] := O[n] U {s}
-	n.O[str] = struct{}{}
+	n.O[kwIdx] = struct{}{}
 
 	// for x in IF[n] loop enter_output(x, s) end for
 	for x, _ := range n.IF {
-		if err := x.AddOutput(str); err != nil {
+		if err := x.AddOutput(kwIdx); err != nil {
 			return err
 		}
 	}
@@ -66,13 +69,18 @@ func (n *node) AddOutput(str *[]rune) error {
 }
 
 func (t *Automaton) addChild(n *node, c rune, data []rune) error {
+	if n == nil {
+		return ErrNullPointer
+	}
+
 	// n'
 	np := &node{
-		root: false,
-		data: data,
-		T:    make(map[rune]*node),
-		O:    make(map[*[]rune]struct{}),
-		IF:   make(map[*node]struct{}),
+		root:   false,
+		parent: n,
+		data:   data,
+		T:      make(map[rune]*node),
+		O:      make(map[uint64]struct{}),
+		IF:     make(map[*node]struct{}),
 	}
 
 	// T[n, c] := n'
@@ -99,12 +107,32 @@ func (t *Automaton) addChild(n *node, c rune, data []rune) error {
 
 // RemoveString is the inverse operation to AddString. it removes a needle string from the automaton
 func (t *Automaton) RemoveString(needle []rune) error {
+	// no-op if no keywords
+	if len(t.keywords) == 0 {
+		return nil
+	}
+
 	n := t.root
 
-	// dfs to get string
+	// get intIdx
+	intIdx := -1
+	for idx, kw := range t.keywords {
+		if slices.Equal(kw, needle) {
+			intIdx = idx
+			break
+		}
+	}
+	if intIdx == -1 {
+		return ErrTrieFindFailed
+	}
+	kwIdx := uint64(intIdx)
+
+	// dfs to get node and its parent
 	for _, c := range needle {
-		if _, has := n.T[c]; !has {
+		if k, has := n.T[c]; !has {
 			return ErrTrieFindFailed
+		} else {
+			n = k
 		}
 	}
 
@@ -121,22 +149,55 @@ func (t *Automaton) RemoveString(needle []rune) error {
 		return ErrEmptyNodeData
 	}
 
-	last := n.data[len(n.data)-1]
-
+	// for every inverse fail remove their fail link and any output link to us
 	for i, _ := range n.IF {
+		if i == nil {
+			return ErrNullPointer
+		}
+
 		i.F = nil
+
+		delete(i.O, kwIdx)
+		delete(n.IF, i)
 	}
 
-	if err := t.completeFailure(n, last); err != nil {
-		return err
+	delete(n.O, kwIdx)
+
+	// prune tree
+	for n.parent != nil {
+		p := n.parent
+
+		if len(n.data) == 0 {
+			return ErrEmptyNodeData
+		}
+
+		last := n.data[len(n.data)-1]
+
+		// do not touch a node that is being referred to
+		if len(n.T) != 0 || len(n.O) != 0 {
+			break
+		}
+
+		if len(n.IF) != 0 {
+			break
+		}
+
+		delete(p.T, last)
+		n = p
 	}
 
 	return nil
+
+	// // finally rebuild failure links everywhere
+	// return t.BuildFailure()
 }
 
 // AddString adds a needle string to the automaton
 func (t *Automaton) AddString(needle []rune) error {
 	n := t.root
+
+	t.keywords = append(t.keywords, needle)
+	idx := uint64(len(t.keywords) - 1)
 
 	for i, c := range needle {
 		if _, has := n.T[c]; !has {
@@ -148,7 +209,7 @@ func (t *Automaton) AddString(needle []rune) error {
 		n = n.T[c]
 	}
 
-	return n.AddOutput(&needle)
+	return n.AddOutput(idx)
 }
 
 // bfs is a helper for breadth first search
@@ -327,7 +388,7 @@ func InitAutomaton(strings [][]rune) (*Automaton, error) {
 	rootNode := &node{
 		root: true,
 		T:    make(map[rune]*node),
-		O:    make(map[*[]rune]struct{}),
+		O:    make(map[uint64]struct{}),
 		IF:   make(map[*node]struct{}),
 	}
 
@@ -377,9 +438,13 @@ func (t *Automaton) Match(haystack []rune) ([]Match, error) {
 
 			if len(n.O) != 0 {
 				for w, _ := range n.O {
+					if w >= uint64(len(t.keywords)) {
+						return matches, ErrOutputDoesNotExist
+					}
+
 					matches = append(matches, Match{
 						Off:  i + 1,
-						Word: *w,
+						Word: t.keywords[w],
 					})
 				}
 			}
