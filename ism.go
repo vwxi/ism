@@ -105,6 +105,26 @@ func (t *Automaton) addChild(n *node, c rune, data []rune) error {
 	return t.completeInverse(n, np, c)
 }
 
+// AddString adds a needle string to the automaton
+func (t *Automaton) AddString(needle []rune) error {
+	n := t.root
+
+	t.keywords = append(t.keywords, needle)
+	idx := uint64(len(t.keywords) - 1)
+
+	for i, c := range needle {
+		if _, has := n.T[c]; !has {
+			if err := t.addChild(n, c, needle[:(i+1)]); err != nil {
+				return err
+			}
+		}
+
+		n = n.T[c]
+	}
+
+	return n.AddOutput(idx)
+}
+
 // RemoveString is the inverse operation to AddString. it removes a needle string from the automaton
 func (t *Automaton) RemoveString(needle []rune) error {
 	// no-op if no keywords
@@ -187,29 +207,6 @@ func (t *Automaton) RemoveString(needle []rune) error {
 	}
 
 	return nil
-
-	// // finally rebuild failure links everywhere
-	// return t.BuildFailure()
-}
-
-// AddString adds a needle string to the automaton
-func (t *Automaton) AddString(needle []rune) error {
-	n := t.root
-
-	t.keywords = append(t.keywords, needle)
-	idx := uint64(len(t.keywords) - 1)
-
-	for i, c := range needle {
-		if _, has := n.T[c]; !has {
-			if err := t.addChild(n, c, needle[:(i+1)]); err != nil {
-				return err
-			}
-		}
-
-		n = n.T[c]
-	}
-
-	return n.AddOutput(idx)
 }
 
 // bfs is a helper for breadth first search
@@ -359,8 +356,8 @@ func (t *Automaton) completeInverse(n *node, np *node, c rune) error {
 	return nil
 }
 
-// BuildFailure builds the failure function for a given tree
-func (t *Automaton) BuildFailure() error {
+// buildFailure builds the failure function for a given tree
+func (t *Automaton) buildFailure() error {
 	err := t.root.bfs(func(n *node) error {
 		n.F = t.lps(n)
 
@@ -381,9 +378,7 @@ func (t *Automaton) BuildFailure() error {
 	})
 }
 
-// InitAutomaton builds the automaton
-//
-// on an empty slice it will return an empty automaton
+// InitAutomaton builds the automaton. on an empty slice it will return an empty automaton
 func InitAutomaton(strings [][]rune) (*Automaton, error) {
 	rootNode := &node{
 		root: true,
@@ -409,7 +404,7 @@ func InitAutomaton(strings [][]rune) (*Automaton, error) {
 		}
 	}
 
-	if err := tree.BuildFailure(); err != nil {
+	if err := tree.buildFailure(); err != nil {
 		return nil, err
 	}
 
@@ -418,7 +413,7 @@ func InitAutomaton(strings [][]rune) (*Automaton, error) {
 
 // Match returns a list of all rune slice matches in a given haystack
 //
-// the offsets returned correspond to the character immediately proceeding
+// the offsets returned correspond to the character immediately proceeding the matched keyword
 func (t *Automaton) Match(haystack []rune) ([]Match, error) {
 	matches := make([]Match, 0, 100)
 	n := t.root
