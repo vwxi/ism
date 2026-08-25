@@ -12,6 +12,7 @@ var ErrFailDoesNotExist = errors.New("failing link does not exist")
 var ErrInvFailDoesNotExist = errors.New("inverse failing set does not exist")
 var ErrChildDoesNotExist = errors.New("child does not exist")
 var ErrTrieFindFailed = errors.New("trie find failed")
+var ErrEmptyNodeData = errors.New("empty node data")
 
 type node struct {
 	root bool
@@ -39,7 +40,7 @@ type Automaton struct {
 type Match struct {
 	Off int
 
-	Words [][]rune
+	Word []rune
 }
 
 func (n *node) AddOutput(str *[]rune) error {
@@ -96,12 +97,50 @@ func (t *Automaton) addChild(n *node, c rune, data []rune) error {
 	return t.completeInverse(n, np, c)
 }
 
-func (t *Automaton) AddString(str []rune) error {
+// RemoveString is the inverse operation to AddString. it removes a needle string from the automaton
+func (t *Automaton) RemoveString(needle []rune) error {
 	n := t.root
 
-	for i, c := range str {
+	// dfs to get string
+	for _, c := range needle {
 		if _, has := n.T[c]; !has {
-			if err := t.addChild(n, c, str[:(i+1)]); err != nil {
+			return ErrTrieFindFailed
+		}
+	}
+
+	if n == nil {
+		return ErrNullPointer
+	}
+
+	// remove references. go up fail to remove self. go down IF to remove self
+	if n.F != nil {
+		delete(n.F.IF, n)
+	}
+
+	if len(n.data) == 0 {
+		return ErrEmptyNodeData
+	}
+
+	last := n.data[len(n.data)-1]
+
+	for i, _ := range n.IF {
+		i.F = nil
+	}
+
+	if err := t.completeFailure(n, last); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// AddString adds a needle string to the automaton
+func (t *Automaton) AddString(needle []rune) error {
+	n := t.root
+
+	for i, c := range needle {
+		if _, has := n.T[c]; !has {
+			if err := t.addChild(n, c, needle[:(i+1)]); err != nil {
 				return err
 			}
 		}
@@ -109,7 +148,7 @@ func (t *Automaton) AddString(str []rune) error {
 		n = n.T[c]
 	}
 
-	return n.AddOutput(&str)
+	return n.AddOutput(&needle)
 }
 
 // bfs is a helper for breadth first search
@@ -318,7 +357,7 @@ func InitAutomaton(strings [][]rune) (*Automaton, error) {
 
 // Match returns a list of all rune slice matches in a given haystack
 //
-// the 0-indexed offsets returned correspond to the index of the end of the word
+// the offsets returned correspond to the character immediately proceeding
 func (t *Automaton) Match(haystack []rune) ([]Match, error) {
 	matches := make([]Match, 0, 100)
 	n := t.root
@@ -337,15 +376,12 @@ func (t *Automaton) Match(haystack []rune) ([]Match, error) {
 			n = n.T[c]
 
 			if len(n.O) != 0 {
-				words := make([][]rune, 0, 100)
 				for w, _ := range n.O {
-					words = append(words, *w)
+					matches = append(matches, Match{
+						Off:  i + 1,
+						Word: *w,
+					})
 				}
-
-				matches = append(matches, Match{
-					Off:   i,
-					Words: words,
-				})
 			}
 		}
 	}
